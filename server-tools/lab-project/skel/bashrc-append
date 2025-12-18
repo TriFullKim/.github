@@ -1,0 +1,30 @@
+
+# Lab 프로젝트 환경변수 로드
+if [ -f /etc/profile.d/lab-project.sh ]; then
+    source /etc/profile.d/lab-project.sh
+fi
+
+# 프롬프트에 현재 프로젝트 표시
+__get_prompt_path() {
+    local current_path="$PWD"
+    
+    # 프로젝트 디렉토리
+    if [ -n "$PROJECT_ROOT" ] && [[ "$current_path" == "$PROJECT_ROOT"/* ]]; then
+        local depth=$(echo "$PROJECT_ROOT" | tr -cd '/' | wc -c)
+        local field=$((depth + 2))
+        local project_name=$(echo "$current_path" | cut -d'/' -f$field)
+        local sub_path=$(echo "$current_path" | sed "s|^$PROJECT_ROOT/$project_name||")
+        if [ -z "$sub_path" ]; then
+            echo "<$project_name>"
+        else
+            echo "<$project_name>$sub_path"
+        fi
+    # 홈 디렉토리
+    elif [[ "$current_path" == "$HOME"* ]]; then
+        echo "${current_path/#$HOME/\~}"
+    else
+        echo "$current_path"
+    fi
+}
+
+PS1='${CONDA_DEFAULT_ENV:+($CONDA_DEFAULT_ENV)}${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]$(__get_prompt_path)\[\033[00m\]\$ '
