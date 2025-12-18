@@ -1,9 +1,1 @@
-```bash
-#!/home/trifull/.local/bin
-Python # PyTorch
-```
-
-```bash
-- 3D Representation
-- Object Detection
-```
+# Github Profile and My Templates
