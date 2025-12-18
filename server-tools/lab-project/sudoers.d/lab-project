@@ -1,8 +1,0 @@
-%labshare ALL=(ALL) NOPASSWD: /usr/sbin/groupadd proj_*
-%labshare ALL=(ALL) NOPASSWD: /usr/sbin/groupdel proj_*
-%labshare ALL=(ALL) NOPASSWD: /usr/sbin/usermod -aG proj_* *
-%labshare ALL=(ALL) NOPASSWD: /usr/bin/gpasswd -d * proj_*
-%labshare ALL=(ALL) NOPASSWD: /bin/mkdir -p {{PROJECT_ROOT}}/*
-%labshare ALL=(ALL) NOPASSWD: /bin/chgrp -R proj_* {{PROJECT_ROOT}}/*
-%labshare ALL=(ALL) NOPASSWD: /bin/chmod -R 2775 {{PROJECT_ROOT}}/*
-%labshare ALL=(ALL) NOPASSWD: /bin/rm -rf {{PROJECT_ROOT}}/*

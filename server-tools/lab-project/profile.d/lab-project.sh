@@ -1,2 +1,0 @@
-export PROJECT_ROOT="{{PROJECT_ROOT}}"
-export PATH="{{INSTALL_DIR}}:$PATH"
