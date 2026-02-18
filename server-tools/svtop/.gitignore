@@ -1,0 +1,7 @@
+.secret_key
+__pycache__/
+*.pyc
+venv/
+monitor.db
+monitor.db-shm
+monitor.db-wal

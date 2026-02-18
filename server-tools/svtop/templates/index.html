@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Monitor Dashboard</title>
+    <meta name="description" content="Real-time server monitoring dashboard with CPU, RAM, GPU, and disk metrics">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="3" width="20" height="14" rx="2"/>
+                    <line x1="8" y1="21" x2="16" y2="21"/>
+                    <line x1="12" y1="17" x2="12" y2="21"/>
+                </svg>
+                <span>Server Monitor</span>
+            </div>
+        </div>
+        <nav class="server-list" id="serverList">
+            <div class="server-list-label">SERVERS</div>
+            <!-- Populated by JS -->
+        </nav>
+        <div class="sidebar-footer">
+            <button class="btn btn-collect" id="collectBtn" onclick="triggerCollection()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                </svg>
+                수동 수집
+            </button>
+            <div class="config-info" id="configInfo"></div>
+        </div>
+    </aside>
+
+    <main class="main-content" id="mainContent">
+        <!-- Empty state -->
+        <div class="empty-state" id="emptyState">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
+                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                <line x1="8" y1="21" x2="16" y2="21"/>
+                <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+            <h2>서버를 선택하세요</h2>
+            <p>사이드바에서 모니터링할 서버를 클릭하세요</p>
+        </div>
+
+        <!-- Dashboard content (hidden initially) -->
+        <div class="dashboard" id="dashboard" style="display:none;">
+            <header class="dash-header">
+                <div>
+                    <h1 id="serverTitle">-</h1>
+                    <span class="last-updated" id="lastUpdated">-</span>
+                </div>
+                <div class="time-range">
+                    <button class="btn-range active" data-hours="1">1H</button>
+                    <button class="btn-range" data-hours="6">6H</button>
+                    <button class="btn-range" data-hours="24">24H</button>
+                    <button class="btn-range" data-hours="72">3D</button>
+                    <button class="btn-range" data-hours="168">7D</button>
+                </div>
+            </header>
+
+            <!-- Metric summary cards -->
+            <div class="metric-cards" id="metricCards">
+                <div class="card metric-card" id="cardCpu">
+                    <div class="card-label">CPU</div>
+                    <div class="card-value" id="valCpu">-</div>
+                    <div class="card-bar"><div class="bar-fill bar-cpu" id="barCpu"></div></div>
+                </div>
+                <div class="card metric-card" id="cardRam">
+                    <div class="card-label">RAM</div>
+                    <div class="card-value" id="valRam">-</div>
+                    <div class="card-bar"><div class="bar-fill bar-ram" id="barRam"></div></div>
+                </div>
+                <div class="card metric-card" id="cardGpu">
+                    <div class="card-label">GPU</div>
+                    <div class="card-value" id="valGpu">-</div>
+                    <div class="card-bar"><div class="bar-fill bar-gpu" id="barGpu"></div></div>
+                </div>
+                <div class="card metric-card" id="cardDisk">
+                    <div class="card-label">DISK</div>
+                    <div class="card-value" id="valDisk">-</div>
+                    <div class="card-bar"><div class="bar-fill bar-disk" id="barDisk"></div></div>
+                </div>
+            </div>
+
+            <!-- Charts -->
+            <div class="charts-grid">
+                <div class="card chart-card">
+                    <h3>CPU Usage (%)</h3>
+                    <canvas id="chartCpu"></canvas>
+                </div>
+                <div class="card chart-card">
+                    <h3>RAM Usage (MB)</h3>
+                    <canvas id="chartRam"></canvas>
+                </div>
+                <div class="card chart-card">
+                    <h3>GPU Utilization (%)</h3>
+                    <canvas id="chartGpu"></canvas>
+                </div>
+                <div class="card chart-card">
+                    <h3>Disk Usage (%)</h3>
+                    <canvas id="chartDisk"></canvas>
+                </div>
+            </div>
+
+            <!-- Processes & Users -->
+            <div class="bottom-grid">
+                <div class="card table-card">
+                    <h3>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="4" y="4" width="16" height="16" rx="2"/>
+                            <rect x="9" y="9" width="6" height="6"/>
+                            <line x1="9" y1="1" x2="9" y2="4"/>
+                            <line x1="15" y1="1" x2="15" y2="4"/>
+                            <line x1="9" y1="20" x2="9" y2="23"/>
+                            <line x1="15" y1="20" x2="15" y2="23"/>
+                            <line x1="20" y1="9" x2="23" y2="9"/>
+                            <line x1="20" y1="14" x2="23" y2="14"/>
+                            <line x1="1" y1="9" x2="4" y2="9"/>
+                            <line x1="1" y1="14" x2="4" y2="14"/>
+                        </svg>
+                        Top Processes
+                    </h3>
+                    <div class="table-scroll">
+                        <table id="processTable">
+                            <thead>
+                                <tr>
+                                    <th>PID</th>
+                                    <th>User</th>
+                                    <th>CPU%</th>
+                                    <th>MEM%</th>
+                                    <th>Command</th>
+                                </tr>
+                            </thead>
+                            <tbody id="processBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="card table-card users-card">
+                    <h3>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                            <circle cx="9" cy="7" r="4"/>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                        </svg>
+                        Active Users
+                        <span class="badge" id="userCount">0</span>
+                    </h3>
+                    <div class="table-scroll">
+                        <table id="userTable">
+                            <thead>
+                                <tr>
+                                    <th>Username</th>
+                                    <th>Terminal</th>
+                                    <th>Login Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="userBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

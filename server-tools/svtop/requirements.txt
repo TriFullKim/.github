@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+jinja2
+paramiko
+apscheduler
+pyyaml
+notion-client

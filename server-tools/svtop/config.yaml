@@ -1,0 +1,20 @@
+# Server Monitor Configuration
+# =============================
+
+servers:
+  - name: "example-server"
+    host: "example-server"       # Tailscale hostname or IP
+    user: "ubuntu"
+    port: 22
+    ssh_key: "~/.ssh/id_rsa"     # SSH key path (primary auth)
+    # password_encrypted: ""     # Auto-filled on startup if no ssh_key found
+
+# Collection settings
+collect_interval_seconds: 300    # 5 minutes
+log_retention_days: 30           # 30 days
+
+# Notion integration (optional)
+notion:
+  enabled: false
+  api_key: "ntn_YOUR_NOTION_API_KEY"
+  database_id: "YOUR_DATABASE_ID"
