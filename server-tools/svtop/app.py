@@ -83,35 +83,70 @@ if notion_cfg.get("enabled"):
 
 
 # ─── Collection Job ────────────────────────────────────────────────────────
-def run_collection():
-    """Collect metrics from all configured servers."""
-    logger.info("Starting metric collection cycle")
+def run_collection(sync_notion: bool = True):
+    """
+    Collect metrics from all configured servers.
+    :param sync_notion: If True, sync results to Notion.
+    """
+    logger.info(f"Starting metric collection cycle (Notion={'ON' if sync_notion else 'OFF'})")
     servers = config.get("servers", [])
     collected = []
 
-    for server in servers:
-        data = collect_server_metrics(server)
-        if data:
-            metric_id = db.insert_metric(
-                server_name=data["server_name"],
-                cpu=data["cpu"],
-                ram_used=data["ram_used"],
-                ram_total=data["ram_total"],
-                gpu_util=data["gpu_util"],
-                gpu_mem_used=data["gpu_mem_used"],
-                gpu_mem_total=data["gpu_mem_total"],
-                disk_percent=data["disk"],
-            )
-            db.insert_processes(metric_id, data["processes"])
-            db.insert_users(metric_id, data["users"])
-            collected.append(data)
-            logger.info(f"  ✓ {data['server_name']}: CPU={data['cpu']}%, RAM={data['ram_used']}/{data['ram_total']}MB")
-        else:
-            logger.warning(f"  ✗ {server['name']}: collection failed")
+    import concurrent.futures
+    
+    def process_server(server):
+        try:
+            data = collect_server_metrics(server)
+            if data:
+                return data
+            else:
+                logger.warning(f"  ✗ {server['name']}: collection failed")
+                return None
+        except Exception as e:
+            logger.error(f"  ✗ {server['name']}: error {e}")
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_server = {executor.submit(process_server, s): s for s in servers}
+        
+        for future in concurrent.futures.as_completed(future_to_server):
+            data = future.result()
+            if data:
+                metric_id = db.insert_metric(
+                    server_name=data["server_name"],
+                    cpu=data["cpu_percent"],
+                    ram_used=data["ram_used"],
+                    ram_total=data["ram_total"],
+                    gpu_util=data["gpu_util"],
+                    gpu_mem_used=data["gpu_mem_used"],
+                    gpu_mem_total=data["gpu_mem_total"],
+                    disk_percent=data["disk"], # Overall Free %
+                    cpu_load=data["cpu_load"],
+                    cpu_threads_total=data["cpu_threads_total"]
+                )
+                db.insert_processes(metric_id, data["processes"])
+                db.insert_users(metric_id, data["users"])
+                db.insert_disks(metric_id, data["disks"])
+                if data["home_usage"]:
+                    db.insert_home_usage(metric_id, data["home_usage"])
+                    
+                collected.append(data)
+                logger.info(f"  ✓ {data['server_name']}: CPU={data['cpu_load']}/{data['cpu_threads_total']}, RAM={int(data['ram_used'])}MB")
 
     # Notion sync
-    if notion_sync and collected:
-        notion_sync.sync_all(collected)
+    # Notion sync (Update logic if needed, or disable for now if schema mismatches again)
+    # Since we changed data structure, NotionSync might break if it expects specific keys.
+    # The 'data' dict now has 'cpu_percent' instead of 'cpu'.
+    # We should probably update notion_sync.py to match, or map it here.
+    # For now, let's just map it quickly to avoid breaking it completely.
+    if sync_notion and notion_sync and collected:
+        # Adapt data for notion sync (compat mode)
+        notion_data = []
+        for d in collected:
+            d_copy = d.copy()
+            d_copy["cpu"] = d["cpu_percent"]
+            notion_data.append(d_copy)
+        notion_sync.sync_all(notion_data)
 
     # Cleanup old data
     retention = config.get("log_retention_days", 30)
@@ -123,7 +158,8 @@ def run_collection():
 # ─── Scheduler ──────────────────────────────────────────────────────────────
 scheduler = BackgroundScheduler()
 interval = config.get("collect_interval_seconds", 300)
-scheduler.add_job(run_collection, "interval", seconds=interval, id="collect_job")
+# Scheduled job always syncs to Notion
+scheduler.add_job(run_collection, "interval", seconds=interval, id="collect_job", kwargs={"sync_notion": True})
 
 
 @asynccontextmanager
@@ -167,19 +203,24 @@ async def api_latest(server_name: str):
 
     processes = db.get_processes(metric["id"])
     users = db.get_users(metric["id"])
+    disks = db.get_disks(metric["id"])
+    home_usage = db.get_home_usage(metric["id"])
+    
     return {
         "server": server_name,
         "metric": metric,
         "processes": processes,
         "users": users,
+        "disks": disks,
+        "home_usage": home_usage,
     }
 
 
 @app.post("/api/collect")
 async def api_collect():
-    """Trigger manual collection."""
+    """Trigger manual collection (Notion sync skipped)."""
     import threading
-    t = threading.Thread(target=run_collection, daemon=True)
+    t = threading.Thread(target=run_collection, args=(False,), daemon=True)
     t.start()
     return {"status": "collection_started"}
 

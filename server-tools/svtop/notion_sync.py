@@ -34,16 +34,20 @@ class NotionSync:
             
             # Define required properties
             required_props = {
-                "CPU (%)": {"number": {"format": "percent"}},
-                "RAM Used (MB)": {"number": {"format": "number"}},
-                "RAM Total (MB)": {"number": {"format": "number"}},
-                "Disk (%)": {"number": {"format": "percent"}},
+                "CPU Load": {"number": {"format": "number"}},
+                "CPU Threads": {"number": {"format": "number"}},
+                "RAM Used (GB)": {"number": {"format": "number"}},
+                "RAM Total (GB)": {"number": {"format": "number"}},
+                "Disk Free (%)": {"number": {"format": "percent"}},
+                "Home Usage": {"rich_text": {}},
+                "Disk Info": {"rich_text": {}},
+                # Keep old ones for compatibility or history if needed, or we can deprecate them.
+                # Let's keep them but maybe populate them if we have data.
                 "Active Users": {"number": {"format": "number"}},
                 "Last Updated": {"rich_text": {}},
                 "GPU (%)": {"number": {"format": "percent"}},
                 "GPU Mem (MB)": {"number": {"format": "number"}},
                 "Top Process": {"rich_text": {}},
-                "User List": {"rich_text": {}},
             }
             
             props_to_create = {}
@@ -119,6 +123,49 @@ class NotionSync:
             props["User List"] = {
                 "rich_text": [{"text": {"content": user_str}}]
             }
+
+        # New Metrics
+        props["CPU Load"] = {"number": data.get("cpu_load", 0)}
+        props["CPU Threads"] = {"number": data.get("cpu_threads_total", 0)}
+        
+        # RAM in GB
+        ram_used_mb = data.get("ram_used", 0)
+        ram_total_mb = data.get("ram_total", 0)
+        props["RAM Used (GB)"] = {"number": round(ram_used_mb / 1024, 2)}
+        props["RAM Total (GB)"] = {"number": round(ram_total_mb / 1024, 2)}
+        
+        # Disk Free % (metric.disk is now free %)
+        props["Disk Free (%)"] = {"number": data.get("disk", 0) / 100.0} # Notion expects 0.0-1.0 for percent
+
+        # Disk Info Summary
+        disks = data.get("disks", [])
+        disk_str = ""
+        if disks:
+            # Format: / (ext4): 50%, /data (xfs): 20%
+            disk_summaries = []
+            for d in disks:
+                free_pct = (d["free"] / d["total"] * 100) if d["total"] > 0 else 0
+                disk_summaries.append(f"{d['mount']} ({int(free_pct)}% Free)")
+            disk_str = ", ".join(disk_summaries)
+        props["Disk Info"] = {"rich_text": [{"text": {"content": disk_str[:2000]}}]} # Limit length
+
+        # Home Usage Summary
+        home = data.get("home_usage", [])
+        home_str = ""
+        if home:
+            # Format: user1: 10GB, user2: 5GB
+            home_summaries = []
+            # Sort by size desc
+            sorted_home = sorted(home, key=lambda x: x["size"], reverse=True)
+            for h in sorted_home[:5]: # Top 5 users
+                size_GB = h["size"] / (1024**3)
+                if size_GB >= 1:
+                    size_str = f"{size_GB:.1f}GB"
+                else:
+                    size_str = f"{h['size'] / (1024**2):.0f}MB"
+                home_summaries.append(f"{h['user']}: {size_str}")
+            home_str = ", ".join(home_summaries)
+        props["Home Usage"] = {"rich_text": [{"text": {"content": home_str[:2000]}}]}
 
         return props
 

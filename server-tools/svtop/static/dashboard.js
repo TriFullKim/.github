@@ -112,6 +112,8 @@ async function loadLatest() {
         updateCards(data.metric);
         updateProcessTable(data.processes);
         updateUserTable(data.users);
+        updateDiskTable(data.disks);
+        updateHomeTable(data.home_usage);
     } catch (e) {
         console.error('Failed to load latest:', e);
     }
@@ -128,17 +130,22 @@ function updateCards(metric) {
         return;
     }
 
-    // CPU
-    const cpu = metric.cpu_percent ?? 0;
-    document.getElementById('valCpu').textContent = `${cpu.toFixed(1)}%`;
-    document.getElementById('barCpu').style.width = `${Math.min(cpu, 100)}%`;
+    // CPU (Threads)
+    const load = metric.cpu_load ?? 0;
+    const threads = metric.cpu_threads_total ?? 1;
+    document.getElementById('valCpu').textContent = `${load.toFixed(2)} / ${threads}`;
+    // Bar based on load relative to threads? or just load/threads ratio
+    const cpuPct = (load / threads) * 100; 
+    document.getElementById('barCpu').style.width = `${Math.min(cpuPct, 100)}%`;
 
-    // RAM
+    // RAM (GB)
     const ramPct = metric.ram_total_mb > 0
         ? (metric.ram_used_mb / metric.ram_total_mb * 100)
         : 0;
-    document.getElementById('valRam').textContent =
-        `${Math.round(metric.ram_used_mb)}/${Math.round(metric.ram_total_mb)} MB`;
+    const usedGb = (metric.ram_used_mb / 1024).toFixed(1);
+    const totalGb = (metric.ram_total_mb / 1024).toFixed(1);
+    
+    document.getElementById('valRam').textContent = `${usedGb}/${totalGb} GB`;
     document.getElementById('barRam').style.width = `${Math.min(ramPct, 100)}%`;
 
     // GPU
@@ -150,10 +157,11 @@ function updateCards(metric) {
         document.getElementById('barGpu').style.width = '0%';
     }
 
-    // Disk
-    const disk = metric.disk_usage_percent ?? 0;
-    document.getElementById('valDisk').textContent = `${disk.toFixed(1)}%`;
-    document.getElementById('barDisk').style.width = `${Math.min(disk, 100)}%`;
+    // Disk (Free %)
+    // metric.disk_usage_percent is now "overall free percent"
+    const diskFree = metric.disk_usage_percent ?? 0;
+    document.getElementById('valDisk').textContent = `${diskFree.toFixed(1)}%`;
+    document.getElementById('barDisk').style.width = `${Math.min(diskFree, 100)}%`;
 
     // Last updated
     const ts = new Date(metric.timestamp + 'Z');
@@ -193,6 +201,54 @@ function updateUserTable(users) {
             <td>${escapeHtml(u.username)}</td>
             <td style="font-family:var(--font-mono)">${escapeHtml(u.terminal)}</td>
             <td>${escapeHtml(u.login_time || '-')}</td>
+        </tr>
+    `).join('');
+}
+
+function updateDiskTable(disks) {
+    const tbody = document.getElementById('diskTable');
+    if (!disks || disks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No data</td></tr>';
+        return;
+    }
+    
+    // Format bytes helper
+    const fmt = (b) => {
+        if (b > 1024**4) return (b / 1024**4).toFixed(1) + ' TB';
+        if (b > 1024**3) return (b / 1024**3).toFixed(1) + ' GB';
+        if (b > 1024**2) return (b / 1024**2).toFixed(1) + ' MB';
+        return b + ' B';
+    };
+
+    tbody.innerHTML = disks.map(d => `
+        <tr>
+            <td style="font-family:var(--font-mono)">${escapeHtml(d.mount_point)}</td>
+            <td>${escapeHtml(d.filesystem)}</td>
+            <td>${fmt(d.total_bytes)}</td>
+            <td>${fmt(d.used_bytes)}</td>
+            <td>${fmt(d.free_bytes)}</td>
+            <td>${((d.free_bytes / d.total_bytes)*100).toFixed(1)}%</td>
+        </tr>
+    `).join('');
+}
+
+function updateHomeTable(home) {
+    const tbody = document.getElementById('homeTable');
+    if (!home || home.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--text-muted)">No data (Run collection)</td></tr>';
+        return;
+    }
+    
+    const fmt = (b) => {
+        if (b > 1024**3) return (b / 1024**3).toFixed(2) + ' GB';
+        if (b > 1024**2) return (b / 1024**2).toFixed(1) + ' MB';
+        return (b / 1024).toFixed(0) + ' KB';
+    };
+
+    tbody.innerHTML = home.map(h => `
+        <tr>
+            <td>${escapeHtml(h.username)}</td>
+            <td>${fmt(h.size_bytes)}</td>
         </tr>
     `).join('');
 }
@@ -246,10 +302,10 @@ function initCharts() {
         },
     });
 
-    charts.cpu = new Chart(document.getElementById('chartCpu'), commonOpts('CPU %', chartColors.cpu));
+    charts.cpu = new Chart(document.getElementById('chartCpu'), commonOpts('CPU Load', chartColors.cpu));
     charts.ram = new Chart(document.getElementById('chartRam'), commonOpts('RAM MB', chartColors.ram));
     charts.gpu = new Chart(document.getElementById('chartGpu'), commonOpts('GPU %', chartColors.gpu));
-    charts.disk = new Chart(document.getElementById('chartDisk'), commonOpts('Disk %', chartColors.disk));
+    charts.disk = new Chart(document.getElementById('chartDisk'), commonOpts('Disk Free %', chartColors.disk));
 }
 
 // ─── Load time series ───────────────────────────────────────────────────────
@@ -259,6 +315,7 @@ async function loadTimeSeries() {
         const { data } = await api(`/api/metrics/${encodeURIComponent(currentServer)}?hours=${currentHours}`);
         const timestamps = data.map(d => new Date(d.timestamp + 'Z'));
 
+        // For charts, we still use cpu_percent (which is now load/threads * 100)
         updateChart(charts.cpu, timestamps, data.map(d => d.cpu_percent));
         updateChart(charts.ram, timestamps, data.map(d => d.ram_used_mb));
         updateChart(charts.gpu, timestamps, data.map(d => d.gpu_util));

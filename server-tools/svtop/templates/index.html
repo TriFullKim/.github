@@ -84,7 +84,7 @@
                     <div class="card-bar"><div class="bar-fill bar-gpu" id="barGpu"></div></div>
                 </div>
                 <div class="card metric-card" id="cardDisk">
-                    <div class="card-label">DISK</div>
+                    <div class="card-label">DISK FREE</div>
                     <div class="card-value" id="valDisk">-</div>
                     <div class="card-bar"><div class="bar-fill bar-disk" id="barDisk"></div></div>
                 </div>
@@ -105,12 +105,12 @@
                     <canvas id="chartGpu"></canvas>
                 </div>
                 <div class="card chart-card">
-                    <h3>Disk Usage (%)</h3>
+                    <h3>Disk Free (%)</h3>
                     <canvas id="chartDisk"></canvas>
                 </div>
             </div>
 
-            <!-- Processes & Users -->
+            <!-- Processes & Disks -->
             <div class="bottom-grid">
                 <div class="card table-card">
                     <h3>
@@ -144,7 +144,55 @@
                         </table>
                     </div>
                 </div>
-                <div class="card table-card users-card">
+                <div class="card table-card">
+                     <h3>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        Disk Details
+                    </h3>
+                    <div class="table-scroll">
+                        <table id="diskTable">
+                            <thead>
+                                <tr>
+                                    <th>Mount</th>
+                                    <th>FS</th>
+                                    <th>Size</th>
+                                    <th>Used</th>
+                                    <th>Free</th>
+                                    <th>Free %</th>
+                                </tr>
+                            </thead>
+                            <tbody id="diskBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Home Usage & Users -->
+            <div class="bottom-grid">
+                <div class="card table-card">
+                    <h3>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                            <polyline points="9 22 9 12 15 12 15 22"/>
+                        </svg>
+                        Home Directory Usage
+                    </h3>
+                    <div class="table-scroll">
+                        <table id="homeTable">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Size</th>
+                                </tr>
+                            </thead>
+                            <tbody id="homeBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
                     <h3>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
