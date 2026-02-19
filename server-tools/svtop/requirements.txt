@@ -4,4 +4,4 @@ jinja2
 paramiko
 apscheduler
 pyyaml
-notion-client
+notion-client==2.2.1

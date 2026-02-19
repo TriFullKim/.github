@@ -17,6 +17,49 @@ class NotionSync:
         self.notion = Client(auth=api_key)
         self.database_id = database_id
         self._page_cache: dict[str, str] = {}  # server_name -> page_id
+        self.title_prop = "Name"  # Default, will be updated by _ensure_schema
+        self._ensure_schema()
+
+    def _ensure_schema(self):
+        """Ensure database has necessary properties."""
+        try:
+            db = self.notion.databases.retrieve(database_id=self.database_id)
+            current_props = db.get("properties", {})
+            
+            # Find the title property
+            for name, prop in current_props.items():
+                if prop["type"] == "title":
+                    self.title_prop = name
+                    break
+            
+            # Define required properties
+            required_props = {
+                "CPU (%)": {"number": {"format": "percent"}},
+                "RAM Used (MB)": {"number": {"format": "number"}},
+                "RAM Total (MB)": {"number": {"format": "number"}},
+                "Disk (%)": {"number": {"format": "percent"}},
+                "Active Users": {"number": {"format": "number"}},
+                "Last Updated": {"rich_text": {}},
+                "GPU (%)": {"number": {"format": "percent"}},
+                "GPU Mem (MB)": {"number": {"format": "number"}},
+                "Top Process": {"rich_text": {}},
+                "User List": {"rich_text": {}},
+            }
+            
+            props_to_create = {}
+            for name, config in required_props.items():
+                if name not in current_props:
+                    props_to_create[name] = config
+            
+            if props_to_create:
+                logger.info(f"Adding missing properties to Notion DB: {list(props_to_create.keys())}")
+                self.notion.databases.update(
+                    database_id=self.database_id,
+                    properties=props_to_create
+                )
+                
+        except Exception as e:
+            logger.error(f"Failed to ensure schema: {e}")
 
     def _find_page(self, server_name: str) -> Optional[str]:
         """Find existing page for a server by name."""
@@ -27,7 +70,7 @@ class NotionSync:
             result = self.notion.databases.query(
                 database_id=self.database_id,
                 filter={
-                    "property": "Server Name",
+                    "property": self.title_prop,
                     "title": {"equals": server_name},
                 },
             )
@@ -44,7 +87,7 @@ class NotionSync:
         now = datetime.now(timezone.utc).isoformat()
 
         props = {
-            "Server Name": {"title": [{"text": {"content": data["server_name"]}}]},
+            self.title_prop: {"title": [{"text": {"content": data["server_name"]}}]},
             "CPU (%)": {"number": data.get("cpu", 0)},
             "RAM Used (MB)": {"number": data.get("ram_used", 0)},
             "RAM Total (MB)": {"number": data.get("ram_total", 0)},
