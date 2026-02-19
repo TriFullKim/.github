@@ -104,7 +104,18 @@ class Database:
                 if "disk_usage_percent" not in columns:
                      cur.execute("ALTER TABLE metrics ADD COLUMN disk_usage_percent REAL")
             except Exception as e:
-                print(f"Migration warning: {e}")
+                print(f"Migration warning A: {e}")
+
+        if "disk_used_bytes" not in columns:
+            try:
+                cur.execute("ALTER TABLE metrics ADD COLUMN disk_used_bytes INTEGER")
+                cur.execute("ALTER TABLE metrics ADD COLUMN disk_total_bytes INTEGER")
+                
+                # Migration: Invert existing disk_usage_percent (Free -> Used)
+                print("Migrating disk metrics (Free -> Used)...")
+                cur.execute("UPDATE metrics SET disk_usage_percent = 100 - disk_usage_percent WHERE disk_usage_percent IS NOT NULL")
+            except Exception as e:
+                print(f"Migration warning B: {e}")
 
         self.conn.commit()
 
@@ -112,18 +123,21 @@ class Database:
                       ram_total: float, gpu_util: Optional[float],
                       gpu_mem_used: Optional[float], gpu_mem_total: Optional[float],
                       disk_percent: float, cpu_load: Optional[float] = 0.0,
-                      cpu_threads_total: Optional[int] = 0) -> int:
+                      cpu_threads_total: Optional[int] = 0,
+                      disk_used_bytes: Optional[int] = 0,
+                      disk_total_bytes: Optional[int] = 0) -> int:
         cur = self.conn.cursor()
         cur.execute("""
             INSERT INTO metrics (timestamp, server_name, cpu_percent,
                 ram_used_mb, ram_total_mb, gpu_util, gpu_mem_used_mb,
-                gpu_mem_total_mb, disk_usage_percent, cpu_load, cpu_threads_total)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                gpu_mem_total_mb, disk_usage_percent, cpu_load, cpu_threads_total,
+                disk_used_bytes, disk_total_bytes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             datetime.utcnow().isoformat(),
             server_name, cpu, ram_used, ram_total,
             gpu_util, gpu_mem_used, gpu_mem_total, disk_percent,
-            cpu_load, cpu_threads_total
+            cpu_load, cpu_threads_total, disk_used_bytes, disk_total_bytes
         ))
         self.conn.commit()
         return cur.lastrowid
@@ -216,6 +230,70 @@ class Database:
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM home_usage WHERE metric_id = ? ORDER BY size_bytes DESC", (metric_id,))
         return [dict(row) for row in cur.fetchall()]
+
+
+    def get_overview_stats(self, server_name: str) -> dict:
+        """
+        Get overview statistics for a server:
+        - Current metrics
+        - 24h history (for sparklines)
+        - 1h average (for trend calculation)
+        """
+        now = datetime.utcnow()
+        last_24h = now - timedelta(hours=24)
+        last_1h = now - timedelta(hours=1)
+        
+        cur = self.conn.cursor()
+        
+        # Get 24h history
+        cur.execute("""
+            SELECT timestamp, gpu_util, disk_usage_percent, disk_used_bytes, disk_total_bytes
+            FROM metrics
+            WHERE server_name = ? AND timestamp >= ?
+            ORDER BY timestamp ASC
+        """, (server_name, last_24h.isoformat()))
+        rows = [dict(r) for r in cur.fetchall()]
+        
+        if not rows:
+            return None
+            
+        # Current (last item)
+        current = rows[-1]
+        
+        # Calculate 1h stats
+        one_hour_rows = [r for r in rows if r["timestamp"] >= last_1h.isoformat()]
+        
+        avg_gpu_1h = 0.0
+        avg_disk_1h = 0.0
+        
+        if one_hour_rows:
+            gpu_vals = [r["gpu_util"] or 0.0 for r in one_hour_rows]
+            disk_vals = [r["disk_usage_percent"] or 0.0 for r in one_hour_rows]
+            avg_gpu_1h = sum(gpu_vals) / len(gpu_vals)
+            avg_disk_1h = sum(disk_vals) / len(disk_vals)
+            
+        # Extract sparkline data (timestamp, gpu, disk)
+        # We can return simplified lists for smaller payload
+        history = {
+            "timestamps": [r["timestamp"] for r in rows],
+            "gpu": [r["gpu_util"] or 0.0 for r in rows],
+            "disk": [r["disk_usage_percent"] or 0.0 for r in rows]
+        }
+        
+        return {
+            "server": server_name,
+            "current": {
+                "gpu": current["gpu_util"] or 0.0,
+                "disk": current["disk_usage_percent"] or 0.0,
+                "disk_used_bytes": current["disk_used_bytes"] or 0,
+                "disk_total_bytes": current["disk_total_bytes"] or 0
+            },
+            "avg_1h": {
+                "gpu": avg_gpu_1h,
+                "disk": avg_disk_1h
+            },
+            "history": history
+        }
 
     def cleanup_old_data(self, retention_days: int = 30):
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()

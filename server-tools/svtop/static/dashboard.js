@@ -31,10 +31,48 @@ document.addEventListener('DOMContentLoaded', () => {
     setupTimeRange();
 });
 
+// ─── Verification & Helpers ──────────────────────────────────────────
+
+function isOnline(timestamp) {
+    if (!timestamp) return false;
+    const ts = new Date(timestamp + 'Z').getTime();
+    const now = new Date().getTime();
+    const diffMinutes = (now - ts) / 1000 / 60;
+    // Consider online if data is younger than 10 minutes (2x default interval)
+    return diffMinutes < 10;
+}
+
+function renderStatusDot(timestamp) {
+    const online = isOnline(timestamp);
+    return `<span class="gallery-status-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>`;
+}
+
+async function refreshServer(serverName, btnId) {
+    const btn = document.getElementById(btnId);
+    if (btn) btn.classList.add('spin');
+    
+    // Prevent event bubbling if called from card click
+    if (event) event.stopPropagation();
+
+    try {
+        await api(`/api/collect?server=${encodeURIComponent(serverName)}`, { method: 'POST' });
+        // After starting collection, wait a bit then refresh view
+        setTimeout(() => {
+            if (currentView === 'home') loadOverview();
+            else if (currentView === serverName) loadServerDetail(serverName);
+            
+            if (btn) btn.classList.remove('spin');
+        }, 2000); // Wait 2s for collection to likely finish
+    } catch (e) {
+        console.error("Refresh failed", e);
+        if (btn) btn.classList.remove('spin');
+    }
+}
+
 // ─── API helpers ────────────────────────────────────────────────────────────
-async function api(path) {
-    const res = await fetch(path);
-    if (!res.ok) throw new Error(`API ${res.status}`);
+async function api(path, options = {}) {
+    const res = await fetch(path, options);
+    if (!res.ok) throw new Error(res.statusText);
     return res.json();
 }
 
@@ -43,13 +81,13 @@ async function loadServers() {
     try {
         const { servers } = await api('/api/servers');
         const list = document.getElementById('serverList');
-        const label = list.querySelector('.server-list-label');
-        // Clear existing items (keep label)
-        list.querySelectorAll('.server-item').forEach(el => el.remove());
+        
+        // Clear all items (Label is now outside this container)
+        list.innerHTML = '';
 
         servers.forEach(name => {
             const item = document.createElement('div');
-            item.className = 'server-item';
+            item.className = 'nav-item'; // Use common class
             item.dataset.server = name;
             item.innerHTML = `<span class="server-dot"></span><span>${name}</span>`;
             item.addEventListener('click', () => selectServer(name));
@@ -58,7 +96,8 @@ async function loadServers() {
 
         // Auto-select first server if none selected
         if (!currentServer && servers.length > 0) {
-            selectServer(servers[0]);
+            // Default to Home view instead of first server
+            switchView('home');
         }
     } catch (e) {
         console.error('Failed to load servers:', e);
@@ -78,30 +117,9 @@ async function loadConfig() {
     } catch (e) { /* ignore */ }
 }
 
-// ─── Select a server ────────────────────────────────────────────────────────
+// ─── Select a server (Legacy wrapper) ───────────────────────────────────────
 function selectServer(name) {
-    currentServer = name;
-
-    // Update sidebar active state
-    document.querySelectorAll('.server-item').forEach(el => {
-        el.classList.toggle('active', el.dataset.server === name);
-    });
-
-    // Show dashboard, hide empty state
-    document.getElementById('emptyState').style.display = 'none';
-    document.getElementById('dashboard').style.display = 'block';
-    document.getElementById('serverTitle').textContent = name;
-
-    // Load data
-    loadLatest();
-    loadTimeSeries();
-
-    // Setup auto-refresh
-    if (refreshTimer) clearInterval(refreshTimer);
-    refreshTimer = setInterval(() => {
-        loadLatest();
-        loadTimeSeries();
-    }, REFRESH_INTERVAL);
+    switchView(name);
 }
 
 // ─── Load latest snapshot ───────────────────────────────────────────────────
@@ -109,11 +127,12 @@ async function loadLatest() {
     if (!currentServer) return;
     try {
         const data = await api(`/api/latest/${encodeURIComponent(currentServer)}`);
-        updateCards(data.metric);
-        updateProcessTable(data.processes);
-        updateUserTable(data.users);
-        updateDiskTable(data.disks);
-        updateHomeTable(data.home_usage);
+        
+        try { updateCards(data.metric); } catch(e) { console.error("updateCards failed", e); }
+        try { updateProcessTable(data.processes); } catch(e) { console.error("updateProcessTable failed", e); }
+        try { updateUserTable(data.users); } catch(e) { console.error("updateUserTable failed", e); }
+        try { updateDiskTable(data.disks); } catch(e) { console.error("updateDiskTable failed", e); }
+        try { updateHomeTable(data.home_usage); } catch(e) { console.error("updateHomeTable failed", e); }
     } catch (e) {
         console.error('Failed to load latest:', e);
     }
@@ -157,16 +176,58 @@ function updateCards(metric) {
         document.getElementById('barGpu').style.width = '0%';
     }
 
-    // Disk (Free %)
-    // metric.disk_usage_percent is now "overall free percent"
-    const diskFree = metric.disk_usage_percent ?? 0;
-    document.getElementById('valDisk').textContent = `${diskFree.toFixed(1)}%`;
-    document.getElementById('barDisk').style.width = `${Math.min(diskFree, 100)}%`;
+    // Disk (Used)
+    const diskUsedVal = metric.disk_usage_percent ?? 0;
+    const diskUsedBytes = metric.disk_used_bytes ?? 0;
+    const diskTotalBytes = metric.disk_total_bytes ?? 0;
+
+    let diskText = `${diskUsedVal.toFixed(1)}%`;
+    if (diskTotalBytes > 0) {
+        diskText = `${diskUsedVal.toFixed(1)}% <span class="text-muted">(${formatBytes(diskUsedBytes)} / ${formatBytes(diskTotalBytes)})</span>`;
+    }
+
+    document.getElementById('valDisk').innerHTML = diskText;
+    const liveDot = document.getElementById('liveDot');
+    if (liveDot) liveDot.className = `server-dot ${isOnline(metric.timestamp) ? 'online' : ''}`;
+    
+    // Update Refresh Button
+    const btnRef = document.getElementById('btn-ref-detail');
+    if (btnRef) {
+        btnRef.onclick = () => refreshServer(data.server, 'btn-ref-detail');
+    }
+    barDisk.className = `bar-fill ${getDiskColor(diskUsedVal)}`;
 
     // Last updated
     const ts = new Date(metric.timestamp + 'Z');
-    document.getElementById('lastUpdated').textContent =
-        `Last updated: ${ts.toLocaleString('ko-KR')}`;
+    const updateEl = document.getElementById('lastUpdated');
+    updateEl.textContent = `Last updated: ${ts.toLocaleString('ko-KR')}`;
+    
+    // Check Online/Offline for content dimming
+    const online = isOnline(metric.timestamp);
+    const contentIds = ['metricCards', 'processTable', 'diskTable', 'homeTable', 'userTable']; 
+    // Actually we should dim the containers: .metric-cards, .charts-grid, .bottom-grid
+    const containerIds = ['metricCards', 'chartSection', 'processSection', 'diskSection', 'bottomSection'];
+    
+    // Helper to get elements easily. We didn't assign IDs to all sections, let's just target by class or add IDs dynamically?
+    // Easier: target header siblings.
+    // Or just manually target the known containers.
+    // In index.html: metricCards (id=metricCards), charts-grid (class), bottom-grid (class)
+    
+    const grids = document.querySelectorAll('.metric-cards, .charts-grid, .bottom-grid');
+    grids.forEach(el => {
+        if (online) {
+            el.classList.remove('content-offline');
+        } else {
+            el.classList.add('content-offline');
+        }
+    });
+
+    if (online) {
+        updateEl.classList.remove('stale');
+    } else {
+        updateEl.classList.add('stale');
+        updateEl.textContent += ' (Offline)';
+    }
 }
 
 // ─── Update process table ───────────────────────────────────────────────────
@@ -180,8 +241,8 @@ function updateProcessTable(processes) {
         <tr>
             <td style="font-family:var(--font-mono)">${p.pid}</td>
             <td>${p.user || '-'}</td>
-            <td>${p.cpu_percent?.toFixed(1) ?? '-'}%</td>
-            <td>${p.mem_percent?.toFixed(1) ?? '-'}%</td>
+            <td>${p.cpu_percent != null ? p.cpu_percent.toFixed(1) : '-'}%</td>
+            <td>${p.mem_percent != null ? p.mem_percent.toFixed(1) : '-'}%</td>
             <td>${escapeHtml(p.command || '-')}</td>
         </tr>
     `).join('');
@@ -220,16 +281,22 @@ function updateDiskTable(disks) {
         return b + ' B';
     };
 
-    tbody.innerHTML = disks.map(d => `
-        <tr>
-            <td style="font-family:var(--font-mono)">${escapeHtml(d.mount_point)}</td>
-            <td>${escapeHtml(d.filesystem)}</td>
-            <td>${fmt(d.total_bytes)}</td>
-            <td>${fmt(d.used_bytes)}</td>
-            <td>${fmt(d.free_bytes)}</td>
-            <td>${((d.free_bytes / d.total_bytes)*100).toFixed(1)}%</td>
-        </tr>
-    `).join('');
+    tbody.innerHTML = disks.map(d => {
+        // The backend `parse_disks` returns "percent" as Free %
+        const freePct = (d.free_bytes / d.total_bytes) * 100;
+        const usedPct = 100 - freePct;
+
+        return `
+            <tr>
+                <td style="font-family:var(--font-mono)">${escapeHtml(d.mount_point)}</td>
+                <td>${escapeHtml(d.filesystem)}</td>
+                <td>${fmt(d.total_bytes)}</td>
+                <td>${fmt(d.used_bytes)}</td>
+                <td>${fmt(d.free_bytes)}</td>
+                <td class="${usedPct > 90 ? 'text-danger' : ''}">${usedPct.toFixed(1)}%</td>
+            </tr>
+        `;
+    }).join('');
 }
 
 function updateHomeTable(home) {
@@ -304,8 +371,8 @@ function initCharts() {
 
     charts.cpu = new Chart(document.getElementById('chartCpu'), commonOpts('CPU Load', chartColors.cpu));
     charts.ram = new Chart(document.getElementById('chartRam'), commonOpts('RAM MB', chartColors.ram));
-    charts.gpu = new Chart(document.getElementById('chartGpu'), commonOpts('GPU %', chartColors.gpu));
-    charts.disk = new Chart(document.getElementById('chartDisk'), commonOpts('Disk Free %', chartColors.disk));
+    charts.gpu = new Chart(document.getElementById('chartGpu'), commonOpts('GPU Utilization %', chartColors.gpu));
+    charts.disk = new Chart(document.getElementById('chartDisk'), commonOpts('Disk Usage %', chartColors.disk));
 }
 
 // ─── Load time series ───────────────────────────────────────────────────────
@@ -340,6 +407,176 @@ function setupTimeRange() {
             currentHours = parseInt(btn.dataset.hours, 10);
             loadTimeSeries();
         });
+    });
+}
+
+// ─── View Switching ────────────────────────────────────────────────────────
+function switchView(viewName) {
+    // Hide all dashboards
+    document.getElementById('homeDashboard').style.display = 'none';
+    document.getElementById('detailDashboard').style.display = 'none';
+    document.getElementById('emptyState').style.display = 'none';
+    
+    // Update Sidebar
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    document.getElementById('navHome').classList.toggle('active', viewName === 'home');
+
+    if (refreshTimer) clearInterval(refreshTimer);
+
+    if (viewName === 'home') {
+        document.getElementById('homeDashboard').style.display = 'block';
+        currentServer = null;
+        loadHome();
+        refreshTimer = setInterval(loadHome, REFRESH_INTERVAL);
+    } else {
+        document.getElementById('detailDashboard').style.display = 'block';
+        currentServer = viewName;
+        // Sidebar active state
+        const item = document.querySelector(`.nav-item[data-server="${viewName}"]`);
+        if (item) item.classList.add('active');
+        
+        document.getElementById('serverTitle').textContent = viewName;
+        loadLatest();
+        loadTimeSeries();
+        refreshTimer = setInterval(() => {
+            loadLatest();
+            loadTimeSeries();
+        }, REFRESH_INTERVAL);
+    }
+}
+
+// ─── Load Home Dashboard ───────────────────────────────────────────────────
+async function loadHome() {
+    try {
+        const { overview } = await api('/api/overview');
+        renderGallery(overview);
+        document.getElementById('homeLastUpdated').textContent = 
+            `Last updated: ${new Date().toLocaleString('ko-KR')}`;
+    } catch (e) {
+        console.error('Failed to load overview:', e);
+    }
+}
+
+function renderGallery(data) {
+    const grid = document.getElementById('galleryGrid');
+    grid.innerHTML = '';
+    
+    data.forEach(server => {
+        const card = document.createElement('div');
+        card.className = 'gallery-card';
+        card.onclick = () => switchView(server.server);
+        
+        // Calculate Trends
+        const gpuTrend = server.current.gpu - server.avg_1h.gpu;
+        const diskTrend = server.current.disk - server.avg_1h.disk;
+        
+        // Use most recent timestamp from history for status check
+        const lastTs = server.history.timestamps[server.history.timestamps.length - 1];
+
+        card.innerHTML = `
+            <div class="gallery-header">
+                <h2>${renderStatusDot(lastTs)} ${server.server}</h2>
+                <button class="btn-refresh-sm" id="btn-ref-${server.server}" onclick="refreshServer('${server.server}', 'btn-ref-${server.server}')" title="Refresh">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                </button>
+            </div>
+            
+            <div class="gallery-body">
+                <div class="gallery-col">
+                    <div class="gallery-label">GPU</div>
+                    <div class="sparkline-wrapper">
+                        <canvas id="spark-gpu-${server.server}"></canvas>
+                    </div>
+                    <div class="gallery-metric">
+                        <span class="gallery-val" style="color:var(--accent-orange)">
+                            ${server.current.gpu.toFixed(0)}%
+                        </span>
+                        ${renderTrend(gpuTrend, 'gpu')}
+                    </div>
+                </div>
+                
+                <div class="gallery-divider"></div>
+
+                <div class="gallery-col">
+                    <div class="gallery-label">Storage Used</div>
+                    <div class="sparkline-wrapper">
+                        <canvas id="spark-disk-${server.server}"></canvas>
+                    </div>
+                    <div class="gallery-metric">
+                        <span class="gallery-val" style="color:var(--accent-green)">
+                            ${server.current.disk.toFixed(0)}%
+                            <span style="font-size:0.5em;color:var(--text-muted);margin-left:4px;">
+                                (${formatBytes(server.current.disk_used_bytes)})
+                            </span>
+                        </span>
+                        ${renderTrend(diskTrend, 'disk')}
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        grid.appendChild(card);
+        
+        // Render Sparklines (Filled Area)
+        renderSparkline(`spark-gpu-${server.server}`, server.history.timestamps, server.history.gpu, chartColors.gpu);
+        renderSparkline(`spark-disk-${server.server}`, server.history.timestamps, server.history.disk, chartColors.disk);
+    });
+}
+
+
+function renderTrend(delta, type) {
+    if (Math.abs(delta) < 0.1) return ''; // No significant change
+    
+    const isUp = delta > 0;
+    const arrow = isUp ? '↑' : '↓';
+    const val = Math.abs(delta).toFixed(1);
+    
+    let cls = '';
+    if (type === 'gpu') {
+        cls = isUp ? 'trend-up' : 'trend-down'; // GPU Up is bad (Red), Down is good (Green)
+    } else {
+        // Disk Used: Up is bad (Red), Down is good (Green)
+        // Re-using same classes since logic is now identical to GPU
+        cls = isUp ? 'trend-up' : 'trend-down';
+    }
+    
+    return `<span class="trend-badge ${cls}">${arrow} ${val}%</span>`;
+}
+
+function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function renderSparkline(id, labels, data, colorObj) {
+    const ctx = document.getElementById(id).getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: data,
+                borderColor: colorObj.border,
+                backgroundColor: colorObj.bg, // Fill color
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: true, // Area chart
+                tension: 0.3
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: {
+                x: { display: false },
+                y: { display: false, min: 0, max: 100 }
+            },
+            layout: { padding: 0 }
+        }
     });
 }
 

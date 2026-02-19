@@ -83,13 +83,23 @@ if notion_cfg.get("enabled"):
 
 
 # ─── Collection Job ────────────────────────────────────────────────────────
-def run_collection(sync_notion: bool = True):
+def run_collection(sync_notion: bool = True, server_name: str = None):
     """
-    Collect metrics from all configured servers.
+    Collect metrics from all configured servers (or a specific one).
     :param sync_notion: If True, sync results to Notion.
+    :param server_name: If provided, only collect for this server.
     """
-    logger.info(f"Starting metric collection cycle (Notion={'ON' if sync_notion else 'OFF'})")
-    servers = config.get("servers", [])
+    logger.info(f"Starting metric collection (Notion={'ON' if sync_notion else 'OFF'}, Target={server_name or 'ALL'})")
+    
+    all_servers = config.get("servers", [])
+    if server_name:
+        servers = [s for s in all_servers if s["name"] == server_name]
+        if not servers:
+            logger.warning(f"Server '{server_name}' not found in config.")
+            return
+    else:
+        servers = all_servers
+        
     collected = []
 
     import concurrent.futures
@@ -112,6 +122,16 @@ def run_collection(sync_notion: bool = True):
         for future in concurrent.futures.as_completed(future_to_server):
             data = future.result()
             if data:
+                # Calculate aggregated disk metrics (Used instead of Free)
+                disk_total = 0
+                disk_used = 0
+                for d in data.get("disks", []):
+                    disk_total += d.get("total", 0)
+                    disk_used += d.get("used", 0)
+                
+                # Global Used %
+                disk_used_percent = (disk_used / disk_total * 100.0) if disk_total > 0 else 0.0
+
                 metric_id = db.insert_metric(
                     server_name=data["server_name"],
                     cpu=data["cpu_percent"],
@@ -120,9 +140,11 @@ def run_collection(sync_notion: bool = True):
                     gpu_util=data["gpu_util"],
                     gpu_mem_used=data["gpu_mem_used"],
                     gpu_mem_total=data["gpu_mem_total"],
-                    disk_percent=data["disk"], # Overall Free %
+                    disk_percent=disk_used_percent, # Sving USED % now
                     cpu_load=data["cpu_load"],
-                    cpu_threads_total=data["cpu_threads_total"]
+                    cpu_threads_total=data["cpu_threads_total"],
+                    disk_used_bytes=disk_used,
+                    disk_total_bytes=disk_total
                 )
                 db.insert_processes(metric_id, data["processes"])
                 db.insert_users(metric_id, data["users"])
@@ -169,11 +191,26 @@ async def lifespan(app: FastAPI):
     yield
     scheduler.shutdown()
 
-
 # ─── FastAPI App ────────────────────────────────────────────────────────────
 app = FastAPI(title="Server Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+
+@app.get("/api/overview")
+async def api_overview():
+    """Get overview stats for all servers (Home Dashboard)."""
+    cfg_servers = [s["name"] for s in config.get("servers", [])]
+    db_servers = db.get_servers()
+    all_servers = sorted(set(cfg_servers + db_servers))
+    
+    overview_data = []
+    for server in all_servers:
+        stats = db.get_overview_stats(server)
+        if stats:
+            overview_data.append(stats)
+            
+    return {"overview": overview_data}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -217,12 +254,12 @@ async def api_latest(server_name: str):
 
 
 @app.post("/api/collect")
-async def api_collect():
-    """Trigger manual collection (Notion sync skipped)."""
+async def api_collect(server: str = Query(None)):
+    """Trigger manual collection (Notion sync skipped). Optional: specific server."""
     import threading
-    t = threading.Thread(target=run_collection, args=(False,), daemon=True)
+    t = threading.Thread(target=run_collection, args=(False, server), daemon=True)
     t.start()
-    return {"status": "collection_started"}
+    return {"status": "collection_started", "target": server or "all"}
 
 
 @app.get("/api/config")
